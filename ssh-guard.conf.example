@@ -1,0 +1,108 @@
+# SSH Guard Configuration Example
+# Copy this file to /etc/ssh-guard.conf or ~/.ssh-guard.conf
+
+# Security mode determines the default behavior:
+# - strict: Block all write operations, even to /tmp
+# - standard: Block dangerous operations, allow benign writes to /tmp  
+# - audit-only: Log all commands but don't block anything
+mode=standard
+
+# Webhook URL for real-time notifications when commands are blocked
+# The webhook will receive a JSON POST with command details
+# webhook_url=https://your-monitoring.example.com/webhook/ssh-guard
+# webhook_url=https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
+
+# Custom allow patterns (regular expressions)
+# These commands will be allowed even if they would normally be blocked
+# Use with extreme caution!
+
+# Allow specific config file reads
+# allow_pattern[]=^cat /etc/myapp/config\.conf$
+# allow_pattern[]=^grep -r "pattern" /opt/myapp/logs$
+
+# Allow custom application commands
+# allow_pattern[]=^/opt/myapp/bin/status$
+# allow_pattern[]=^myapp-cli --status$
+
+# Custom block patterns (regular expressions)  
+# These commands will be blocked even if they would normally be allowed
+# Useful for blocking access to sensitive data or commands
+
+# Block access to sensitive files
+# block_pattern[]=.*secret.*
+# block_pattern[]=.*password.*
+# block_pattern[]=.*\.env$
+# block_pattern[]=.*id_rsa.*
+
+# Block specific commands that might be risky in your environment
+# block_pattern[]=^kubectl.*prod.*
+# block_pattern[]=.*production.*
+# block_pattern[]=^ssh .*
+
+# Grey zone controls (1=enabled, 0=disabled)
+# These control whether potentially risky commands trigger warnings vs blocks
+
+# Allow cp command with warnings (may copy sensitive files)
+grey_cp=1
+
+# Allow tee command with warnings (may overwrite files)  
+grey_tee=1
+
+# Allow docker exec with warnings (may escape container boundaries)
+# WARNING: docker exec can be very dangerous - consider keeping this 0
+grey_docker_exec=0
+
+# Allow writes to /tmp directory with warnings
+grey_tmp_writes=1
+
+# Example configurations for different security levels:
+
+# PARANOID CONFIGURATION (maximum security):
+# mode=strict
+# grey_cp=0
+# grey_tee=0  
+# grey_docker_exec=0
+# grey_tmp_writes=0
+
+# DEVELOPMENT CONFIGURATION (more permissive):
+# mode=standard
+# grey_cp=1
+# grey_tee=1
+# grey_docker_exec=1
+# grey_tmp_writes=1
+
+# AUDIT CONFIGURATION (monitor everything, block nothing):
+# mode=audit-only
+# webhook_url=https://your-siem.example.com/ssh-guard
+# grey_cp=1
+# grey_tee=1
+# grey_docker_exec=1
+# grey_tmp_writes=1
+
+# Real-world example patterns:
+
+# For a web application server:
+# allow_pattern[]=^tail -f /var/log/nginx/.*\.log$
+# allow_pattern[]=^systemctl status (nginx|php-fpm)$
+# block_pattern[]=^rm.*www.*
+# block_pattern[]=.*\.htaccess$
+
+# For a database server:
+# allow_pattern[]=^mysql -e "SHOW.*"$
+# allow_pattern[]=^mysqladmin status$
+# block_pattern[]=.*DROP.*
+# block_pattern[]=.*DELETE.*WHERE.*
+
+# For a Kubernetes cluster:
+# allow_pattern[]=^kubectl get .*$
+# allow_pattern[]=^kubectl describe .*$
+# block_pattern[]=^kubectl delete .*$
+# block_pattern[]=^kubectl apply .*$
+# block_pattern[]=.*--namespace=production.*
+
+# For Docker environments:
+# allow_pattern[]=^docker ps.*$
+# allow_pattern[]=^docker logs .*$
+# block_pattern[]=^docker run .*$
+# block_pattern[]=^docker exec.*bash$
+# block_pattern[]=^docker exec.*sh$
