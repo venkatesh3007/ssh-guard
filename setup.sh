@@ -343,22 +343,53 @@ info "Step 8: Verifying..."
 
 PASS=0; FAIL=0
 check() {
-    if [[ "$2" == "pass" ]]; then ok "  $1"; ((PASS++))
-    else err "  $1"; ((FAIL++)); fi
+    if [[ "$2" == "pass" ]]; then
+        ok "  $1"
+        PASS=$((PASS + 1))
+    else
+        err "  $1"
+        FAIL=$((FAIL + 1))
+    fi
 }
 
-id "$USERNAME" &>/dev/null && check "User exists" "pass" || check "User exists" "fail"
-[[ "$(passwd -S "$USERNAME" 2>/dev/null | awk '{print $2}')" == "L" ]] && check "Password locked" "pass" || check "Password locked" "fail"
-! groups "$USERNAME" 2>/dev/null | grep -qwE "sudo|wheel|admin" && check "Not in privileged groups" "pass" || check "Not in privileged groups" "fail"
-[[ -f "/etc/sudoers.d/deny-${USERNAME}" ]] && check "Sudo deny rule" "pass" || check "Sudo deny rule" "fail"
-[[ -f "$AUTH_KEYS" && -s "$AUTH_KEYS" ]] && check "SSH key installed" "pass" || check "SSH key installed" "fail"
-grep -q "^restrict" "$AUTH_KEYS" 2>/dev/null && check "SSH restrict flag" "pass" || check "SSH restrict flag" "fail"
-[[ "$(stat -c %U "$PROFILE_FILE" 2>/dev/null)" == "root" ]] && check "Profile tamper-proof" "pass" || check "Profile tamper-proof" "fail"
-[[ -f "${LOG_DIR}/audit.log" ]] && check "Audit log exists" "pass" || check "Audit log exists" "fail"
-! su -s /bin/sh "$USERNAME" -c "touch /etc/.sshguard_test 2>/dev/null" && check "Cannot write /etc" "pass" || { rm -f /etc/.sshguard_test; check "Cannot write /etc" "fail"; }
-! su -s /bin/sh "$USERNAME" -c "touch /var/lib/.sshguard_test 2>/dev/null" && check "Cannot write /var/lib" "pass" || { rm -f /var/lib/.sshguard_test; check "Cannot write /var/lib" "fail"; }
-su -s /bin/sh "$USERNAME" -c "ls /var/log/ >/dev/null 2>&1" && check "Can read /var/log" "pass" || check "Can read /var/log" "fail"
-su -s /bin/sh "$USERNAME" -c "ps aux >/dev/null 2>&1" && check "Can run ps" "pass" || check "Can run ps" "fail"
+run_check() {
+    local desc="$1"; shift
+    if "$@" 2>/dev/null; then
+        check "$desc" "pass"
+    else
+        check "$desc" "fail"
+    fi
+}
+
+run_check "User exists" id "$USERNAME"
+run_check "Password locked" test "$(passwd -S "$USERNAME" 2>/dev/null | awk '{print $2}')" = "L"
+if groups "$USERNAME" 2>/dev/null | grep -qwE "sudo|wheel|admin"; then
+    check "Not in privileged groups" "fail"
+else
+    check "Not in privileged groups" "pass"
+fi
+run_check "Sudo deny rule" test -f "/etc/sudoers.d/deny-${USERNAME}"
+run_check "SSH key installed" test -s "$AUTH_KEYS"
+run_check "SSH restrict flag" grep -q "^restrict" "$AUTH_KEYS"
+run_check "Profile tamper-proof" test "$(stat -c %U "$PROFILE_FILE" 2>/dev/null)" = "root"
+run_check "Audit log exists" test -f "${LOG_DIR}/audit.log"
+
+if su -s /bin/sh "$USERNAME" -c "touch /etc/.sshguard_test" 2>/dev/null; then
+    rm -f /etc/.sshguard_test
+    check "Cannot write /etc" "fail"
+else
+    check "Cannot write /etc" "pass"
+fi
+
+if su -s /bin/sh "$USERNAME" -c "touch /var/lib/.sshguard_test" 2>/dev/null; then
+    rm -f /var/lib/.sshguard_test
+    check "Cannot write /var/lib" "fail"
+else
+    check "Cannot write /var/lib" "pass"
+fi
+
+run_check "Can read /var/log" su -s /bin/sh "$USERNAME" -c "ls /var/log/ >/dev/null 2>&1"
+run_check "Can run ps" su -s /bin/sh "$USERNAME" -c "ps aux >/dev/null 2>&1"
 
 echo ""
 printf "  ${GREEN}%d passed${NC}  |  ${RED}%d failed${NC}\n" "$PASS" "$FAIL"
