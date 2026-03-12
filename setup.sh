@@ -383,3 +383,4 @@ echo "  Audit:     tail -f ${LOG_DIR}/audit.log"
 echo "  Remove:    curl -sL <this-url> | sudo bash -s -- --uninstall"
 echo ""
 echo "════════════════════════════════════════════════════════"
+# cache bust
