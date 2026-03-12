@@ -15,6 +15,7 @@
 #   3. Locks down SSH (no forwarding, no tunneling)
 #   4. Explicitly denies sudo access
 #   5. Sets up tamper-proof audit logging
+#   6. Installs SSH command logger (logs non-interactive commands via ForceCommand)
 #
 # What the user CAN do:   Read anything — files, logs, configs, process info
 # What the user CANNOT do: Write, delete, install, restart, kill, sudo — anything destructive
@@ -66,8 +67,8 @@ Examples:
   # Default — creates flyyjarvis user, fetches key from GitHub
   curl -sL <url> | sudo bash
 
-  # Custom username and GitHub user
-  curl -sL <url> | sudo bash -s -- --user aiagent --github myuser
+  # Custom username
+  curl -sL <url> | sudo bash -s -- --user aiagent
 
   # Uninstall
   curl -sL <url> | sudo bash -s -- --uninstall
@@ -90,6 +91,9 @@ echo ""
 # ─── Uninstall ───
 if [[ "$UNINSTALL" == true ]]; then
     info "Removing user $USERNAME and associated config..."
+
+    # Remove command logger
+    rm -f "/usr/local/bin/${USERNAME}-logger.sh"
 
     # Remove SSH config block
     if [[ -f /etc/ssh/sshd_config ]]; then
@@ -199,83 +203,8 @@ done
 # ═══════════════════════════════════════════
 #  STEP 5: Harden SSH for this user
 # ═══════════════════════════════════════════
-info "Step 5: Hardening SSH config..."
-
-SSHD_CONFIG="/etc/ssh/sshd_config"
-
-# Remove existing block if re-running
-sed -i "/^# BEGIN ${USERNAME} readonly/,/^# END ${USERNAME} readonly/d" "$SSHD_CONFIG" 2>/dev/null || true
-
-# Ensure trailing newline
-[[ -s "$SSHD_CONFIG" && "$(tail -c1 "$SSHD_CONFIG" | wc -l)" -eq 0 ]] && echo "" >> "$SSHD_CONFIG"
-
-# Build the Match block, testing each directive against sshd
-SSHD_BIN=$(command -v sshd 2>/dev/null || echo "/usr/sbin/sshd")
-
-# All candidate directives for the Match block
-DIRECTIVES=(
-    "AllowTcpForwarding no"
-    "AllowStreamLocalForwarding no"
-    "GatewayPorts no"
-    "X11Forwarding no"
-    "PermitTunnel no"
-    "AllowAgentForwarding no"
-    "PermitUserEnvironment no"
-    "ClientAliveInterval 300"
-    "ClientAliveCountMax 6"
-    "MaxSessions 3"
-)
-
-MATCH_BLOCK=""
-SKIPPED=""
-
-for directive in "${DIRECTIVES[@]}"; do
-    # Test each directive in a temp config
-    TMPCONF=$(mktemp)
-    cp "$SSHD_CONFIG" "$TMPCONF"
-    echo "" >> "$TMPCONF"
-    echo "Match User ${USERNAME}" >> "$TMPCONF"
-    echo "    $directive" >> "$TMPCONF"
-    # Run sshd -t and capture stderr
-    SSHD_ERR=$("$SSHD_BIN" -t -f "$TMPCONF" 2>&1 || true)
-    # Filter out harmless host key warnings
-    CONFIG_ERRS=$(echo "$SSHD_ERR" | grep -vi "could not load host key" | grep -vi "^$" || true)
-    if [[ -z "$CONFIG_ERRS" ]]; then
-        MATCH_BLOCK="${MATCH_BLOCK}    ${directive}\n"
-    else
-        SKIPPED="${SKIPPED}  - ${directive}\n"
-    fi
-    rm -f "$TMPCONF"
-done
-
-if [[ -z "$MATCH_BLOCK" ]]; then
-    warn "No SSH directives supported in Match block — skipping SSH hardening"
-    warn "The user is still restricted by Linux permissions (no sudo, no write access)"
-else
-    cat >> "$SSHD_CONFIG" <<SSHEOF
-
-# BEGIN ${USERNAME} readonly
-Match User ${USERNAME}
-$(printf "$MATCH_BLOCK")# END ${USERNAME} readonly
-SSHEOF
-
-    # Final validation (ignore host key warnings)
-    FINAL_ERR=$("$SSHD_BIN" -t 2>&1 || true)
-    FINAL_CONFIG_ERRS=$(echo "$FINAL_ERR" | grep -vi "could not load host key" | grep -vi "^$" || true)
-    if [[ -z "$FINAL_CONFIG_ERRS" ]]; then
-        systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
-        ok "SSH config updated and reloaded"
-    else
-        sed -i "/^# BEGIN ${USERNAME} readonly/,/^# END ${USERNAME} readonly/d" "$SSHD_CONFIG"
-        systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
-        fatal "SSH config validation failed — changes rolled back. Error: $FINAL_CONFIG_ERRS"
-    fi
-
-    if [[ -n "$SKIPPED" ]]; then
-        warn "Skipped unsupported directives:"
-        printf "$SKIPPED"
-    fi
-fi
+info "Step 5: SSH hardening (applied in Step 8 with command logger)..."
+ok "SSH hardening deferred to Step 8"
 
 # ═══════════════════════════════════════════
 #  STEP 6: Deny sudo
@@ -329,8 +258,6 @@ chown root:root "${USER_HOME}/.bashrc"
 chmod 644 "${USER_HOME}/.bashrc"
 
 # Audit log: root + user's group, append-only
-# Remove append-only flag first if re-running
-chattr -a "${LOG_DIR}/audit.log" 2>/dev/null || true
 touch "${LOG_DIR}/audit.log"
 chown "root:${USERNAME}" "${LOG_DIR}/audit.log"
 chmod 660 "${LOG_DIR}/audit.log"
@@ -339,59 +266,85 @@ chattr +a "${LOG_DIR}/audit.log" 2>/dev/null || warn "chattr not available (audi
 ok "Audit logging at ${LOG_DIR}/audit.log"
 
 # ═══════════════════════════════════════════
-#  STEP 8: Verify everything
+#  STEP 8: SSH command logger (non-interactive)
 # ═══════════════════════════════════════════
-info "Step 8: Verifying..."
+info "Step 8: Setting up SSH command logger..."
+
+LOGGER_SCRIPT="/usr/local/bin/${USERNAME}-logger.sh"
+
+cat > "$LOGGER_SCRIPT" <<LOGGEREOF
+#!/bin/bash
+CMD="\${SSH_ORIGINAL_COMMAND:-/bin/bash -li}"
+echo "\$(date -u +%Y-%m-%dT%H:%M:%SZ) user=${USERNAME} pwd=\$HOME cmd=\${CMD}" >> ${LOG_DIR}/audit.log 2>/dev/null
+exec /bin/bash -c "\$CMD"
+LOGGEREOF
+
+chmod 755 "$LOGGER_SCRIPT"
+chown root:root "$LOGGER_SCRIPT"
+
+# Add ForceCommand to the existing SSH Match block
+SSHD_CONFIG="/etc/ssh/sshd_config"
+if grep -q "^# BEGIN ${USERNAME} readonly" "$SSHD_CONFIG"; then
+    # Remove old block and rewrite with ForceCommand included
+    sed -i "/^# BEGIN ${USERNAME} readonly/,/^# END ${USERNAME} readonly/d" "$SSHD_CONFIG"
+fi
+
+# Ensure trailing newline
+[[ -s "$SSHD_CONFIG" && "$(tail -c1 "$SSHD_CONFIG" | wc -l)" -eq 0 ]] && echo "" >> "$SSHD_CONFIG"
+
+cat >> "$SSHD_CONFIG" <<SSHEOF
+
+# BEGIN ${USERNAME} readonly
+Match User ${USERNAME}
+    AllowTcpForwarding no
+    AllowStreamLocalForwarding no
+    GatewayPorts no
+    X11Forwarding no
+    PermitTunnel no
+    AllowAgentForwarding no
+    PermitUserEnvironment no
+    ClientAliveInterval 300
+    ClientAliveCountMax 6
+    MaxSessions 3
+    ForceCommand ${LOGGER_SCRIPT}
+# END ${USERNAME} readonly
+SSHEOF
+
+# Validate before reload — rollback on failure
+if sshd -t 2>/dev/null; then
+    systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
+    ok "SSH command logger installed at ${LOGGER_SCRIPT}"
+else
+    sed -i "/^# BEGIN ${USERNAME} readonly/,/^# END ${USERNAME} readonly/d" "$SSHD_CONFIG"
+    systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
+    fatal "SSH config validation failed — changes rolled back"
+fi
+
+# ═══════════════════════════════════════════
+#  STEP 9: Verify everything
+# ═══════════════════════════════════════════
+info "Step 9: Verifying..."
 
 PASS=0; FAIL=0
 check() {
-    if [[ "$2" == "pass" ]]; then
-        ok "  $1"
-        PASS=$((PASS + 1))
-    else
-        err "  $1"
-        FAIL=$((FAIL + 1))
-    fi
+    if [[ "$2" == "pass" ]]; then ok "  $1"; ((PASS++))
+    else err "  $1"; ((FAIL++)); fi
 }
 
-run_check() {
-    local desc="$1"; shift
-    if "$@" 2>/dev/null; then
-        check "$desc" "pass"
-    else
-        check "$desc" "fail"
-    fi
-}
-
-run_check "User exists" id "$USERNAME"
-run_check "Password locked" test "$(passwd -S "$USERNAME" 2>/dev/null | awk '{print $2}')" = "L"
-if groups "$USERNAME" 2>/dev/null | grep -qwE "sudo|wheel|admin"; then
-    check "Not in privileged groups" "fail"
-else
-    check "Not in privileged groups" "pass"
-fi
-run_check "Sudo deny rule" test -f "/etc/sudoers.d/deny-${USERNAME}"
-run_check "SSH key installed" test -s "$AUTH_KEYS"
-run_check "SSH restrict flag" grep -q "^restrict" "$AUTH_KEYS"
-run_check "Profile tamper-proof" test "$(stat -c %U "$PROFILE_FILE" 2>/dev/null)" = "root"
-run_check "Audit log exists" test -f "${LOG_DIR}/audit.log"
-
-if su -s /bin/sh "$USERNAME" -c "touch /etc/.sshguard_test" 2>/dev/null; then
-    rm -f /etc/.sshguard_test
-    check "Cannot write /etc" "fail"
-else
-    check "Cannot write /etc" "pass"
-fi
-
-if su -s /bin/sh "$USERNAME" -c "touch /var/lib/.sshguard_test" 2>/dev/null; then
-    rm -f /var/lib/.sshguard_test
-    check "Cannot write /var/lib" "fail"
-else
-    check "Cannot write /var/lib" "pass"
-fi
-
-run_check "Can read /var/log" su -s /bin/sh "$USERNAME" -c "ls /var/log/ >/dev/null 2>&1"
-run_check "Can run ps" su -s /bin/sh "$USERNAME" -c "ps aux >/dev/null 2>&1"
+id "$USERNAME" &>/dev/null && check "User exists" "pass" || check "User exists" "fail"
+[[ "$(passwd -S "$USERNAME" 2>/dev/null | awk '{print $2}')" == "L" ]] && check "Password locked" "pass" || check "Password locked" "fail"
+! groups "$USERNAME" 2>/dev/null | grep -qwE "sudo|wheel|admin" && check "Not in privileged groups" "pass" || check "Not in privileged groups" "fail"
+[[ -f "/etc/sudoers.d/deny-${USERNAME}" ]] && check "Sudo deny rule" "pass" || check "Sudo deny rule" "fail"
+[[ -f "$AUTH_KEYS" && -s "$AUTH_KEYS" ]] && check "SSH key installed" "pass" || check "SSH key installed" "fail"
+grep -q "^restrict" "$AUTH_KEYS" 2>/dev/null && check "SSH restrict flag" "pass" || check "SSH restrict flag" "fail"
+[[ "$(stat -c %U "$PROFILE_FILE" 2>/dev/null)" == "root" ]] && check "Profile tamper-proof" "pass" || check "Profile tamper-proof" "fail"
+[[ -f "${LOG_DIR}/audit.log" ]] && check "Audit log exists" "pass" || check "Audit log exists" "fail"
+[[ -x "/usr/local/bin/${USERNAME}-logger.sh" ]] && check "Command logger installed" "pass" || check "Command logger installed" "fail"
+grep -q "ForceCommand" "$SSHD_CONFIG" 2>/dev/null && check "ForceCommand configured" "pass" || check "ForceCommand configured" "fail"
+! su -s /bin/sh "$USERNAME" -c "touch /etc/.sshguard_test 2>/dev/null" && check "Cannot write /etc" "pass" || { rm -f /etc/.sshguard_test; check "Cannot write /etc" "fail"; }
+! su -s /bin/sh "$USERNAME" -c "touch /var/lib/.sshguard_test 2>/dev/null" && check "Cannot write /var/lib" "pass" || { rm -f /var/lib/.sshguard_test; check "Cannot write /var/lib" "fail"; }
+su -s /bin/sh "$USERNAME" -c "ls /var/log/ >/dev/null 2>&1" && check "Can read /var/log" "pass" || check "Can read /var/log" "fail"
+su -s /bin/sh "$USERNAME" -c "ps aux >/dev/null 2>&1" && check "Can run ps" "pass" || check "Can run ps" "fail"
 
 echo ""
 printf "  ${GREEN}%d passed${NC}  |  ${RED}%d failed${NC}\n" "$PASS" "$FAIL"
@@ -416,4 +369,3 @@ echo "  Audit:     tail -f ${LOG_DIR}/audit.log"
 echo "  Remove:    curl -sL <this-url> | sudo bash -s -- --uninstall"
 echo ""
 echo "════════════════════════════════════════════════════════"
-# cache bust
