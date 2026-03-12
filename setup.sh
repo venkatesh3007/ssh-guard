@@ -329,6 +329,8 @@ chown root:root "${USER_HOME}/.bashrc"
 chmod 644 "${USER_HOME}/.bashrc"
 
 # Audit log: root + user's group, append-only
+# Remove append-only flag first if re-running
+chattr -a "${LOG_DIR}/audit.log" 2>/dev/null || true
 touch "${LOG_DIR}/audit.log"
 chown "root:${USERNAME}" "${LOG_DIR}/audit.log"
 chmod 660 "${LOG_DIR}/audit.log"
