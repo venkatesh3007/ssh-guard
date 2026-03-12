@@ -313,7 +313,8 @@ Match User ${USERNAME}
 SSHEOF
 
 # Validate before reload — rollback on failure
-if sshd -t 2>/dev/null; then
+SSHD_BIN=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)
+if "$SSHD_BIN" -t 2>/dev/null; then
     systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
     ok "SSH command logger installed at ${LOGGER_SCRIPT}"
 else
