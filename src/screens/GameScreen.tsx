@@ -16,28 +16,27 @@ interface GameScreenProps {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const GRAVITY = 0.22;
-const BALL_RADIUS = 14;
-const POWER_MAX = 24;
-const POWER_MIN = 5;
-const OPTIMAL_POWER_MIN = 10;   // below this = too slow, keeper saves easily
-const OPTIMAL_POWER_MAX = 18;   // above this = over the bar
+const GRAVITY = 0.18;
+const BALL_RADIUS = 13;
+const GOAL_TOP = 110;
+const GOAL_HEIGHT = 130;
 
 interface Ball {
   x: number; y: number; vx: number; vy: number;
   radius: number; rotation: number;
   active: boolean; scored: boolean; saved: boolean; scale: number;
+  targetX: number; targetY: number;
 }
 
 interface Goalkeeper {
   x: number; y: number;
   width: number; height: number;
-  vx: number; state: 'idle' | 'ready' | 'diving' | 'celebrating' | 'sad';
-  diveTarget: number;
+  vx: number; state: 'idle' | 'anticipating' | 'diving' | 'celebrating' | 'sad';
   baseX: number;
   movePhase: number;
-  reactionSpeed: number;
-  predictAccuracy: number;
+  reactionDelay: number;
+  diveSpeed: number;
+  diveTarget: number;
 }
 
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; color: string; size: number; }
@@ -52,23 +51,23 @@ export default function GameScreen({
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [gameState, setGameState] = useState<'aiming'|'charging'|'shooting'|'result'>('aiming');
+  const [gameState, setGameState] = useState<'aiming' | 'shooting' | 'result'>('aiming');
   const [message, setMessage] = useState('');
   const [showConfetti, setShowConfetti] = useState(false);
-  const [slowMo, setSlowMo] = useState(false);
 
   const ballRef = useRef<Ball>({
-    x:0,y:0,vx:0,vy:0,radius:BALL_RADIUS,rotation:0,active:false,scored:false,saved:false,scale:1,
+    x: 0, y: 0, vx: 0, vy: 0, radius: BALL_RADIUS, rotation: 0,
+    active: false, scored: false, saved: false, scale: 1,
+    targetX: 0, targetY: 0,
   });
   const keeperRef = useRef<Goalkeeper>({
-    x:0,y:0,width:50,height:70,vx:0,state:'idle',diveTarget:0,baseX:0,movePhase:0,reactionSpeed:1,predictAccuracy:0.7,
+    x: 0, y: 0, width: 55, height: 75, vx: 0, state: 'idle',
+    baseX: 0, movePhase: 0, reactionDelay: 8, diveSpeed: 1, diveTarget: 0,
   });
   const particlesRef = useRef<Particle[]>([]);
   const animRef = useRef<number>(0);
-  const powerRef = useRef(0);
-  const aimRef = useRef({ angle: -Math.PI/2 });
-  const touchRef = useRef({ startX:0, startY:0, isDragging:false });
-  const goalsScoredRef = useRef(0);
+  const mouseRef = useRef({ x: 0, y: 0 });
+  const goalsRef = useRef(0);
 
   // ─── Resize ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -100,9 +99,10 @@ export default function GameScreen({
     }
   }, [timeRemaining, isPlaying, score, onGameOver, setIsPlaying]);
 
-  const createParticles = useCallback((x:number,y:number,color:string,count:number) => {
-    for (let i=0;i<count;i++) particlesRef.current.push({
-      x,y,vx:(Math.random()-0.5)*14,vy:(Math.random()-0.5)*14-5,life:1,color,size:Math.random()*5+2,
+  const createParticles = useCallback((x: number, y: number, color: string, count: number) => {
+    for (let i = 0; i < count; i++) particlesRef.current.push({
+      x, y, vx: (Math.random() - 0.5) * 12, vy: (Math.random() - 0.5) * 12 - 4,
+      life: 1, color, size: Math.random() * 5 + 2,
     });
   }, []);
 
@@ -110,110 +110,98 @@ export default function GameScreen({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const w = canvas.width, h = canvas.height;
-    ballRef.current = { x:w/2, y:h-90, vx:0, vy:0, radius:BALL_RADIUS, rotation:0, active:false, scored:false, saved:false, scale:1 };
-    const kx = w/2;
+    ballRef.current = {
+      x: w / 2, y: h - 100, vx: 0, vy: 0, radius: BALL_RADIUS,
+      rotation: 0, active: false, scored: false, saved: false, scale: 1,
+      targetX: w / 2, targetY: GOAL_TOP + GOAL_HEIGHT / 2,
+    };
     keeperRef.current = {
-      x:kx, y:150, width:50, height:70, vx:0, state:'idle', diveTarget:kx,
-      baseX:kx, movePhase:Math.random()*Math.PI*2, reactionSpeed:1, predictAccuracy:0.7,
+      x: w / 2, y: GOAL_TOP + GOAL_HEIGHT - 10, width: 55, height: 75,
+      vx: 0, state: 'idle', baseX: w / 2, movePhase: Math.random() * Math.PI * 2,
+      reactionDelay: Math.max(4, 10 - goalsRef.current * 0.5), diveSpeed: Math.min(2, 1 + goalsRef.current * 0.1), diveTarget: w / 2,
     };
     setGameState('aiming');
-    powerRef.current = 0;
     setMessage('');
     setShowConfetti(false);
-    setSlowMo(false);
-    touchRef.current.isDragging = false;
   }, []);
 
-  // ─── Touch / Mouse ──────────────────────────────────────────────────────────
+  // ─── Input ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const getPos = (e:MouseEvent|TouchEvent) => {
+    const getPos = (e: MouseEvent | TouchEvent) => {
       const rect = canvas.getBoundingClientRect();
       const cx = 'touches' in e ? (e.touches[0]?.clientX ?? e.changedTouches[0]?.clientX) : e.clientX;
       const cy = 'touches' in e ? (e.touches[0]?.clientY ?? e.changedTouches[0]?.clientY) : e.clientY;
-      return { x:(cx||0)-rect.left, y:(cy||0)-rect.top };
+      return { x: (cx || 0) - rect.left, y: (cy || 0) - rect.top };
     };
 
-    const onStart = (e:MouseEvent|TouchEvent) => {
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      const pos = getPos(e);
+      mouseRef.current = pos;
+      if (gameState === 'aiming') {
+        ballRef.current.targetX = pos.x;
+        ballRef.current.targetY = pos.y;
+      }
+    };
+
+    const onClick = (e: MouseEvent | TouchEvent) => {
       if (gameState !== 'aiming') return;
       e.preventDefault();
       const pos = getPos(e);
-      touchRef.current = { startX:pos.x, startY:pos.y, isDragging:true };
-      setGameState('charging');
-    };
-
-    const onMove = (e:MouseEvent|TouchEvent) => {
-      if (!touchRef.current.isDragging || gameState !== 'charging') return;
-      e.preventDefault();
-      const pos = getPos(e);
       const ball = ballRef.current;
-      const dx = pos.x - ball.x;
-      const dy = pos.y - ball.y;
-      aimRef.current.angle = Math.atan2(dy, dx);
-      const dist = Math.min(Math.sqrt(dx*dx + dy*dy) / 3, POWER_MAX);
-      powerRef.current = Math.max(dist, POWER_MIN);
-    };
-
-    const onEnd = (e:MouseEvent|TouchEvent) => {
-      if (!touchRef.current.isDragging || gameState !== 'charging') return;
-      e.preventDefault();
-      touchRef.current.isDragging = false;
-
-      const ball = ballRef.current;
-      const pwr = Math.max(powerRef.current, POWER_MIN);
-      const angle = aimRef.current.angle;
-
-      if (angle > -0.15) {
-        setGameState('aiming'); powerRef.current = 0;
-        setMessage('Aim higher!'); setTimeout(()=>setMessage(''), 1000);
-        return;
-      }
-
-      ball.vx = Math.cos(angle) * pwr;
-      ball.vy = Math.sin(angle) * pwr;
-      ball.active = true;
-
-      // Keeper AI
       const keeper = keeperRef.current;
       const canvas = canvasRef.current;
-      if (canvas) {
-        const w = canvas.width;
-        const goalW = w * 0.7;
-        const goalLeft = (w - goalW)/2;
-        const goalRight = (w + goalW)/2;
-        const timeToKeeper = (keeper.y - ball.y) / ball.vy;
-        let predictedX = ball.x + ball.vx * timeToKeeper;
+      if (!canvas) return;
 
-        // Keeper prediction accuracy increases with goals scored (harder over time)
-        const accuracy = keeper.predictAccuracy + goalsScoredRef.current * 0.05;
-        if (Math.random() > accuracy) {
-          predictedX += (Math.random()-0.5) * 150; // wrong prediction
+      // Set target
+      ball.targetX = pos.x;
+      ball.targetY = pos.y;
+
+      // Calculate velocity to reach target
+      const dx = pos.x - ball.x;
+      const dy = pos.y - ball.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const speed = Math.min(dist * 0.12, 16);
+      const angle = Math.atan2(dy, dx);
+
+      ball.vx = Math.cos(angle) * speed;
+      ball.vy = Math.sin(angle) * speed;
+      ball.active = true;
+
+      // Keeper anticipates — starts moving toward target with delay
+      keeper.state = 'anticipating';
+      const targetX = pos.x;
+      keeper.diveSpeed = Math.min(2.5, 1.2 + goalsRef.current * 0.15);
+
+      // Keeper reaction: moves toward predicted landing with some error
+      setTimeout(() => {
+        if (keeper.state === 'anticipating') {
+          keeper.state = 'diving';
+          // Prediction accuracy decreases as player scores more
+          const accuracy = Math.max(0.3, 1 - goalsRef.current * 0.08);
+          let predictedX = targetX;
+          if (Math.random() > accuracy) {
+            predictedX += (Math.random() - 0.5) * 100;
+          }
+          keeper.vx = (predictedX - keeper.x) / (keeper.reactionDelay / keeper.diveSpeed);
         }
-        predictedX = Math.max(goalLeft+25, Math.min(goalRight-25, predictedX));
-        keeper.diveTarget = predictedX;
-        keeper.state = 'diving';
-        keeper.vx = (predictedX - keeper.x) / (12 / keeper.reactionSpeed);
-      }
+      }, 150 + Math.random() * 200);
 
       setGameState('shooting');
-      powerRef.current = 0;
     };
 
-    canvas.addEventListener('mousedown', onStart);
     canvas.addEventListener('mousemove', onMove);
-    canvas.addEventListener('mouseup', onEnd);
-    canvas.addEventListener('touchstart', onStart, { passive:false });
-    canvas.addEventListener('touchmove', onMove, { passive:false });
-    canvas.addEventListener('touchend', onEnd);
+    canvas.addEventListener('touchmove', onMove, { passive: false });
+    canvas.addEventListener('mousedown', onClick);
+    canvas.addEventListener('touchstart', onClick, { passive: false });
+
     return () => {
-      canvas.removeEventListener('mousedown', onStart);
       canvas.removeEventListener('mousemove', onMove);
-      canvas.removeEventListener('mouseup', onEnd);
-      canvas.removeEventListener('touchstart', onStart);
       canvas.removeEventListener('touchmove', onMove);
-      canvas.removeEventListener('touchend', onEnd);
+      canvas.removeEventListener('mousedown', onClick);
+      canvas.removeEventListener('touchstart', onClick);
     };
   }, [gameState]);
 
@@ -224,32 +212,30 @@ export default function GameScreen({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let frameCount = 0;
-
-    const drawField = (w:number, h:number) => {
+    const drawField = (w: number, h: number) => {
       // Sky
-      const sky = ctx.createLinearGradient(0,0,0,h*0.45);
-      sky.addColorStop(0,'#0a1f35'); sky.addColorStop(1,'#1d4a6e');
-      ctx.fillStyle = sky; ctx.fillRect(0,0,w,h*0.45);
+      const sky = ctx.createLinearGradient(0, 0, 0, h * 0.4);
+      sky.addColorStop(0, '#0a1f35'); sky.addColorStop(1, '#1d4a6e');
+      ctx.fillStyle = sky; ctx.fillRect(0, 0, w, h * 0.4);
 
-      // Stands
-      ctx.fillStyle = '#060d1a'; ctx.fillRect(0,35,w,55);
-      for (let i=0;i<w;i+=5) {
-        for (let j=40;j<80;j+=6) {
-          ctx.fillStyle = `hsl(${200+Math.random()*50},55%,${25+Math.random()*30}%)`;
-          ctx.fillRect(i,j,3,4);
+      // Stands with crowd
+      ctx.fillStyle = '#060d1a'; ctx.fillRect(0, 30, w, 60);
+      for (let i = 0; i < w; i += 5) {
+        for (let j = 35; j < 80; j += 6) {
+          ctx.fillStyle = `hsl(${200 + Math.random() * 50}, 55%, ${25 + Math.random() * 30}%)`;
+          ctx.fillRect(i, j, 3, 4);
         }
       }
 
       // Field
-      const fieldTop = 120;
-      const goalW = w*0.7;
-      const grass = ctx.createLinearGradient(0,fieldTop,0,h);
-      grass.addColorStop(0,'#2a5c2e'); grass.addColorStop(1,'#3d8b42');
+      const fieldTop = GOAL_TOP;
+      const goalW = w * 0.72;
+      const grass = ctx.createLinearGradient(0, fieldTop, 0, h);
+      grass.addColorStop(0, '#2a5c2e'); grass.addColorStop(1, '#3d8b42');
       ctx.fillStyle = grass;
       ctx.beginPath();
-      ctx.moveTo((w-goalW)/2, fieldTop);
-      ctx.lineTo((w+goalW)/2, fieldTop);
+      ctx.moveTo((w - goalW) / 2, fieldTop);
+      ctx.lineTo((w + goalW) / 2, fieldTop);
       ctx.lineTo(w, h);
       ctx.lineTo(0, h);
       ctx.closePath(); ctx.fill();
@@ -257,205 +243,172 @@ export default function GameScreen({
       // Stripes
       ctx.save();
       ctx.beginPath();
-      ctx.moveTo((w-goalW)/2, fieldTop); ctx.lineTo((w+goalW)/2, fieldTop);
+      ctx.moveTo((w - goalW) / 2, fieldTop); ctx.lineTo((w + goalW) / 2, fieldTop);
       ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath(); ctx.clip();
-      for (let i=-w;i<w*2;i+=35) {
+      for (let i = -w; i < w * 2; i += 35) {
         ctx.fillStyle = 'rgba(255,255,255,0.03)';
-        ctx.fillRect(i, fieldTop, 17, h-fieldTop);
+        ctx.fillRect(i, fieldTop, 17, h - fieldTop);
       }
       ctx.restore();
 
       // Goal line
-      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo((w-goalW)/2, fieldTop); ctx.lineTo((w+goalW)/2, fieldTop); ctx.stroke();
+      ctx.moveTo((w - goalW) / 2, fieldTop); ctx.lineTo((w + goalW) / 2, fieldTop); ctx.stroke();
 
       // Penalty box
-      const boxW = goalW*0.55;
+      const boxW = goalW * 0.5;
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo((w-boxW)/2, fieldTop+70);
-      ctx.lineTo((w-boxW)/2, fieldTop);
-      ctx.lineTo((w+boxW)/2, fieldTop);
-      ctx.lineTo((w+boxW)/2, fieldTop+70);
+      ctx.moveTo((w - boxW) / 2, fieldTop + 60);
+      ctx.lineTo((w - boxW) / 2, fieldTop);
+      ctx.lineTo((w + boxW) / 2, fieldTop);
+      ctx.lineTo((w + boxW) / 2, fieldTop + 60);
       ctx.stroke();
 
       // Penalty spot
       ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(w/2, fieldTop+70+35, 3, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(w / 2, fieldTop + 60 + 30, 3, 0, Math.PI * 2); ctx.fill();
 
       // Goal posts
-      const postH = 75;
+      const postH = 80;
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 5;
       ctx.beginPath();
-      ctx.moveTo((w-goalW)/2, fieldTop); ctx.lineTo((w-goalW)/2, fieldTop-postH);
-      ctx.lineTo((w+goalW)/2, fieldTop-postH); ctx.lineTo((w+goalW)/2, fieldTop);
+      ctx.moveTo((w - goalW) / 2, fieldTop); ctx.lineTo((w - goalW) / 2, fieldTop - postH);
+      ctx.lineTo((w + goalW) / 2, fieldTop - postH); ctx.lineTo((w + goalW) / 2, fieldTop);
       ctx.stroke();
 
       // Net
       ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 1;
-      for (let x=(w-goalW)/2; x<=(w+goalW)/2; x+=10) {
-        ctx.beginPath(); ctx.moveTo(x, fieldTop-postH); ctx.lineTo(x, fieldTop); ctx.stroke();
+      for (let x = (w - goalW) / 2; x <= (w + goalW) / 2; x += 10) {
+        ctx.beginPath(); ctx.moveTo(x, fieldTop - postH); ctx.lineTo(x, fieldTop); ctx.stroke();
       }
-      for (let y=fieldTop-postH; y<=fieldTop; y+=10) {
-        ctx.beginPath(); ctx.moveTo((w-goalW)/2, y); ctx.lineTo((w+goalW)/2, y); ctx.stroke();
+      for (let y = fieldTop - postH; y <= fieldTop; y += 10) {
+        ctx.beginPath(); ctx.moveTo((w - goalW) / 2, y); ctx.lineTo((w + goalW) / 2, y); ctx.stroke();
       }
 
       // StuCred banner
-      ctx.fillStyle = 'rgba(255,107,53,0.25)';
-      ctx.fillRect((w-goalW)/2+15, fieldTop-postH-22, goalW-30, 18);
-      ctx.fillStyle = '#f7931e'; ctx.font = 'bold 11px Montserrat';
-      ctx.textAlign = 'center'; ctx.fillText('STUCRED', w/2, fieldTop-postH-9);
+      ctx.fillStyle = 'rgba(255,107,53,0.3)';
+      ctx.fillRect((w - goalW) / 2 + 15, fieldTop - postH - 24, goalW - 30, 20);
+      ctx.fillStyle = '#f7931e'; ctx.font = 'bold 12px Montserrat';
+      ctx.textAlign = 'center'; ctx.fillText('STUCRED', w / 2, fieldTop - postH - 10);
     };
 
     const loop = () => {
       const w = canvas.width, h = canvas.height;
-      const centerX = w/2;
-      const goalW = w*0.7;
-      const goalLeft = (w-goalW)/2;
-      const goalRight = (w+goalW)/2;
-      const fieldTop = 120;
-      const timeScale = slowMo ? 0.3 : 1;
-      frameCount++;
+      const centerX = w / 2;
+      const goalW = w * 0.72;
+      const goalLeft = (w - goalW) / 2;
+      const goalRight = (w + goalW) / 2;
+      const fieldTop = GOAL_TOP;
 
-      ctx.clearRect(0,0,w,h);
-      drawField(w,h);
+      ctx.clearRect(0, 0, w, h);
+      drawField(w, h);
 
       const ball = ballRef.current;
       const keeper = keeperRef.current;
+      const mouse = mouseRef.current;
 
-      // ── Keeper idle movement ──
-      if (keeper.state === 'idle' || keeper.state === 'ready') {
-        keeper.movePhase += 0.04;
-        const sway = Math.sin(keeper.movePhase) * 40;
+      // ── Keeper idle sway ──
+      if (keeper.state === 'idle' || keeper.state === 'anticipating') {
+        keeper.movePhase += 0.035;
+        const sway = Math.sin(keeper.movePhase) * 35;
         keeper.x = keeper.baseX + sway;
-        keeper.state = 'ready';
-
-        // Keeper bounces on toes
-        keeper.y = 150 + Math.sin(keeper.movePhase*2) * 3;
+        keeper.y = fieldTop + GOAL_HEIGHT - 10 + Math.sin(keeper.movePhase * 2) * 2;
       }
 
       // ── Ball physics ──
       if (ball.active) {
-        ball.x += ball.vx * timeScale;
-        ball.y += ball.vy * timeScale;
-        ball.vy += GRAVITY * timeScale;
-        ball.rotation += ball.vx * 0.08 * timeScale;
-        ball.scale = Math.max(0.45, 1 - (fieldTop - ball.y)/500);
-
-        // Wind effect (subtle curve)
-        ball.vx += Math.sin(frameCount * 0.02) * 0.03 * timeScale;
-
-        // ── Power check ──
-        const powerUsed = Math.sqrt(ball.vx*ball.vx + ball.vy*ball.vy);
-
-        // Too weak = slow shot, easy save
-        if (powerUsed < OPTIMAL_POWER_MIN && ball.y < fieldTop + 50 && !ball.scored && !ball.saved) {
-          ball.saved = true; ball.active = false;
-          keeper.state = 'celebrating';
-          setGameState('result');
-          setMessage('Too weak!');
-          createParticles(ball.x, ball.y, '#888', 10);
-          onShot({ made:false, points:0, multiplier:1, message:'Too weak!' });
-          setTimeout(resetPositions, 1800);
-        }
-
-        // Too strong = over the bar
-        if (powerUsed > OPTIMAL_POWER_MAX && ball.y < fieldTop - 30 && !ball.scored && !ball.saved) {
-          if (ball.y < fieldTop - 60) {
-            ball.active = false;
-            setGameState('result');
-            setMessage('Over the bar!');
-            createParticles(ball.x, fieldTop, '#fff', 8);
-            onShot({ made:false, points:0, multiplier:1, message:'Over the bar!' });
-            setTimeout(resetPositions, 1800);
-          }
-        }
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+        ball.vy += GRAVITY;
+        ball.rotation += ball.vx * 0.06;
+        ball.scale = Math.max(0.4, 1 - (fieldTop - ball.y) / 500);
 
         // ── Goal check ──
-        if (ball.y < fieldTop && ball.y > fieldTop-20 &&
-            ball.x > goalLeft+5 && ball.x < goalRight-5 &&
-            !ball.scored && !ball.saved) {
+        if (ball.y < fieldTop && ball.y > fieldTop - 25 &&
+          ball.x > goalLeft + 8 && ball.x < goalRight - 8 &&
+          !ball.scored && !ball.saved) {
           ball.scored = true; ball.active = false;
           keeper.state = 'sad';
-          goalsScoredRef.current++;
+          goalsRef.current++;
           setGameState('result');
           setMessage('GOAL!!!');
           setShowConfetti(true);
-          setSlowMo(true);
-          setTimeout(()=>setSlowMo(false), 800);
           createParticles(ball.x, ball.y, '#ffd700', 50);
-          onShot({ made:true, points:100, multiplier:1, message:'GOAL!' });
+          onShot({ made: true, points: 100, multiplier: 1, message: 'GOAL!' });
           setTimeout(resetPositions, 2500);
         }
 
         // ── Miss check ──
-        if ((ball.y < fieldTop-80 || ball.x < -60 || ball.x > w+60 || ball.y > h+60) &&
-            !ball.scored && !ball.saved) {
+        if ((ball.y < fieldTop - 60 || ball.x < -50 || ball.x > w + 50 || ball.y > h + 50) &&
+          !ball.scored && !ball.saved) {
           ball.active = false;
           setGameState('result');
-          setMessage(ball.y < fieldTop-80 ? 'Over the bar!' : 'Wide!');
-          onShot({ made:false, points:0, multiplier:1, message:'Missed!' });
+          setMessage(ball.y < fieldTop - 60 ? 'Over the bar!' : 'Wide!');
+          onShot({ made: false, points: 0, multiplier: 1, message: 'Missed!' });
           setTimeout(resetPositions, 1800);
         }
       }
 
       // ── Keeper diving ──
       if (keeper.state === 'diving') {
-        keeper.x += keeper.vx * timeScale;
-        keeper.y = 150 - Math.abs(keeper.x - centerX) * 0.2;
+        keeper.x += keeper.vx;
+        keeper.y = fieldTop + GOAL_HEIGHT - 10 - Math.abs(keeper.x - centerX) * 0.15;
 
         // Collision
         if (ball.active && !ball.saved && !ball.scored) {
           const dx = ball.x - keeper.x;
-          const dy = ball.y - (keeper.y - keeper.height/2);
-          const dist = Math.sqrt(dx*dx + dy*dy);
-          if (dist < ball.radius + keeper.width*0.55) {
+          const dy = ball.y - (keeper.y - keeper.height / 2);
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < ball.radius + keeper.width * 0.5) {
             ball.saved = true; ball.active = false;
             keeper.state = 'celebrating';
             setGameState('result');
             setMessage('SAVED!');
             createParticles(ball.x, ball.y, '#ff4444', 25);
-            onShot({ made:false, points:0, multiplier:1, message:'Saved!' });
+            onShot({ made: false, points: 0, multiplier: 1, message: 'Saved!' });
             setTimeout(resetPositions, 1800);
           }
         }
 
-        if (Math.abs(keeper.x - keeper.diveTarget) < 4) keeper.vx *= 0.85;
+        if (Math.abs(keeper.x - keeper.diveTarget) < 5) keeper.vx *= 0.85;
       }
 
       // ── Draw keeper ──
       ctx.save();
       ctx.translate(keeper.x, keeper.y);
-      const kScale = 0.75 + (keeper.y-100)/350;
+      const kScale = 0.7 + (keeper.y - 100) / 400;
       ctx.scale(kScale, kScale);
 
       // Body
-      const kg = ctx.createLinearGradient(0,-keeper.height,0,0);
-      kg.addColorStop(0, keeper.state==='sad' ? '#cc4422' : '#ff6b35');
-      kg.addColorStop(1, keeper.state==='sad' ? '#aa3311' : '#f7931e');
+      const kg = ctx.createLinearGradient(0, -keeper.height, 0, 0);
+      kg.addColorStop(0, keeper.state === 'sad' ? '#cc4422' : '#ff6b35');
+      kg.addColorStop(1, keeper.state === 'sad' ? '#aa3311' : '#f7931e');
       ctx.fillStyle = kg;
-      ctx.fillRect(-keeper.width/2, -keeper.height, keeper.width, keeper.height);
+      ctx.fillRect(-keeper.width / 2, -keeper.height, keeper.width, keeper.height);
 
       // Head
       ctx.fillStyle = '#fdbf60';
-      ctx.beginPath(); ctx.arc(0, -keeper.height-14, 15, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, -keeper.height - 14, 15, 0, Math.PI * 2); ctx.fill();
 
-      // Eyes (follow ball)
-      const eyeDir = ball.active ? Math.atan2(ball.y-keeper.y, ball.x-keeper.x) : 0;
+      // Eyes tracking ball/cursor
+      let lookX = mouse.x, lookY = mouse.y;
+      if (ball.active) { lookX = ball.x; lookY = ball.y; }
+      const eyeAngle = Math.atan2(lookY - keeper.y, lookX - keeper.x);
       ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(-6, -keeper.height-16, 5, 0, Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(6, -keeper.height-16, 5, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(-7, -keeper.height - 16, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(7, -keeper.height - 16, 5, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#222';
-      ctx.beginPath(); ctx.arc(-6+Math.cos(eyeDir)*2, -keeper.height-16+Math.sin(eyeDir)*2, 2.5, 0, Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(6+Math.cos(eyeDir)*2, -keeper.height-16+Math.sin(eyeDir)*2, 2.5, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(-7 + Math.cos(eyeAngle) * 2, -keeper.height - 16 + Math.sin(eyeAngle) * 2, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(7 + Math.cos(eyeAngle) * 2, -keeper.height - 16 + Math.sin(eyeAngle) * 2, 2.5, 0, Math.PI * 2); ctx.fill();
 
       // Gloves
       ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(-keeper.width/2-10, -keeper.height/2, 11, 0, Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(keeper.width/2+10, -keeper.height/2, 11, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(-keeper.width / 2 - 10, -keeper.height / 2, 11, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(keeper.width / 2 + 10, -keeper.height / 2, 11, 0, Math.PI * 2); ctx.fill();
 
       ctx.restore();
 
@@ -467,66 +420,52 @@ export default function GameScreen({
 
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
       ctx.beginPath();
-      ctx.ellipse(0, ball.radius+5, ball.radius*0.7, ball.radius*0.25, 0, 0, Math.PI*2); ctx.fill();
+      ctx.ellipse(0, ball.radius + 5, ball.radius * 0.7, ball.radius * 0.25, 0, 0, Math.PI * 2); ctx.fill();
 
-      const bg = ctx.createRadialGradient(-4,-4,0,0,0,ball.radius);
-      bg.addColorStop(0,'#fff'); bg.addColorStop(0.6,'#e8e8e8'); bg.addColorStop(1,'#999');
+      const bg = ctx.createRadialGradient(-4, -4, 0, 0, 0, ball.radius);
+      bg.addColorStop(0, '#fff'); bg.addColorStop(0.6, '#e8e8e8'); bg.addColorStop(1, '#999');
       ctx.fillStyle = bg;
-      ctx.beginPath(); ctx.arc(0,0,ball.radius,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 0, ball.radius, 0, Math.PI * 2); ctx.fill();
 
       ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(0,0,ball.radius*0.55,0,Math.PI*2); ctx.stroke();
-      for (let i=0;i<5;i++) {
-        const a = (i/5)*Math.PI*2;
-        ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.cos(a)*ball.radius*0.55, Math.sin(a)*ball.radius*0.55); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, ball.radius * 0.55, 0, Math.PI * 2); ctx.stroke();
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * ball.radius * 0.55, Math.sin(a) * ball.radius * 0.55); ctx.stroke();
       }
       ctx.restore();
 
-      // ── Aim guide ──
-      if (gameState === 'charging') {
-        const angle = aimRef.current.angle;
-        const pwr = powerRef.current;
+      // ── Aim cursor / target ──
+      if (gameState === 'aiming') {
+        const tx = ball.targetX;
+        const ty = ball.targetY;
 
-        // Trajectory preview
-        ctx.strokeStyle = `rgba(255,255,255,${0.15 + (pwr/POWER_MAX)*0.35})`;
-        ctx.lineWidth = 2; ctx.setLineDash([5,5]);
-        ctx.beginPath(); ctx.moveTo(ball.x, ball.y);
-        let sx=ball.x, sy=ball.y, svx=Math.cos(angle)*pwr, svy=Math.sin(angle)*pwr;
-        for (let i=0;i<35;i++) {
-          sx+=svx; sy+=svy; svy+=GRAVITY;
-          ctx.lineTo(sx,sy); if (sy<fieldTop) break;
-        }
-        ctx.stroke(); ctx.setLineDash([]);
+        // Crosshair
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = 2;
+        const crossSize = 12;
+        ctx.beginPath();
+        ctx.moveTo(tx - crossSize, ty); ctx.lineTo(tx + crossSize, ty);
+        ctx.moveTo(tx, ty - crossSize); ctx.lineTo(tx, ty + crossSize);
+        ctx.stroke();
 
-        // Target dot
-        ctx.fillStyle = `rgba(255,255,255,${0.3 + (pwr/POWER_MAX)*0.4})`;
-        ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI*2); ctx.fill();
+        // Circle
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(tx, ty, 18, 0, Math.PI * 2); ctx.stroke();
 
-        // Power bar
-        const barW = 140, barH = 14, barX = centerX-barW/2, barY = h-55;
-        ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(barX, barY, barW, barH);
+        // Dotted line from ball to target
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(ball.x, ball.y); ctx.lineTo(tx, ty); ctx.stroke();
+        ctx.setLineDash([]);
 
-        const pct = Math.min(pwr/POWER_MAX, 1);
-        // Color zones: green (optimal), yellow, red
-        let col = '#00ff88';
-        if (pwr < OPTIMAL_POWER_MIN) col = '#ffaa00'; // too weak
-        else if (pwr > OPTIMAL_POWER_MAX) col = '#ff4444'; // too strong
-        else col = '#00ff88'; // sweet spot
-
-        ctx.fillStyle = col;
-        ctx.fillRect(barX, barY, barW*pct, barH);
-
-        // Optimal zone markers
-        const optMinX = barX + barW * (OPTIMAL_POWER_MIN/POWER_MAX);
-        const optMaxX = barX + barW * (OPTIMAL_POWER_MAX/POWER_MAX);
-        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(optMinX, barY-3); ctx.lineTo(optMinX, barY+barH+3); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(optMaxX, barY-3); ctx.lineTo(optMaxX, barY+barH+3); ctx.stroke();
-
-        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barW, barH);
-
-        ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Montserrat'; ctx.textAlign = 'center';
-        ctx.fillText('SWEET SPOT', centerX, barY-8);
+        // Target label
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = '11px Montserrat';
+        ctx.textAlign = 'center';
+        ctx.fillText('CLICK TO SHOOT', tx, ty + 35);
       }
 
       // ── Particles ──
@@ -534,7 +473,7 @@ export default function GameScreen({
         p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= 0.025;
         if (p.life > 0) {
           ctx.globalAlpha = p.life; ctx.fillStyle = p.color;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size*p.life, 0, Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2); ctx.fill();
           ctx.globalAlpha = 1; return true;
         }
         return false;
@@ -542,27 +481,28 @@ export default function GameScreen({
 
       // ── Message ──
       if (message) {
-        ctx.fillStyle = message.includes('GOAL') ? '#ffd700' : message.includes('SAVED')||message.includes('weak') ? '#ff6666' : '#fff';
-        ctx.font = 'bold 38px Montserrat'; ctx.textAlign = 'center';
+        ctx.fillStyle = message.includes('GOAL') ? '#ffd700' : message.includes('SAVED') ? '#ff6666' : '#fff';
+        ctx.font = 'bold 40px Montserrat'; ctx.textAlign = 'center';
         ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 12;
-        ctx.fillText(message, centerX, h/2);
+        ctx.fillText(message, centerX, h / 2);
         ctx.shadowBlur = 0;
       }
 
       // ── Confetti ──
       if (showConfetti) {
-        for (let i=0;i<80;i++) {
-          const x = Math.random()*w, y = Math.random()*h*0.6;
-          const sz = Math.random()*6+2;
-          ctx.fillStyle = `hsl(${Math.random()*360},100%,60%)`;
-          ctx.fillRect(x,y,sz,sz);
+        for (let i = 0; i < 80; i++) {
+          const x = Math.random() * w, y = Math.random() * h * 0.6;
+          const sz = Math.random() * 6 + 2;
+          ctx.fillStyle = `hsl(${Math.random() * 360},100%,60%)`;
+          ctx.fillRect(x, y, sz, sz);
         }
       }
 
       // ── Instructions ──
       if (gameState === 'aiming') {
-        ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = '13px Montserrat'; ctx.textAlign = 'center';
-        ctx.fillText('Pull back from ball to aim. Stay in the GREEN zone for power!', centerX, h-22);
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = '13px Montserrat'; ctx.textAlign = 'center';
+        ctx.fillText('Move cursor to aim, CLICK to shoot!', centerX, h - 25);
       }
 
       animRef.current = requestAnimationFrame(loop);
@@ -570,29 +510,29 @@ export default function GameScreen({
 
     animRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animRef.current);
-  }, [gameState, message, showConfetti, slowMo, createParticles, resetPositions, onShot]);
+  }, [gameState, message, showConfetti, createParticles, resetPositions, onShot]);
 
   return (
-    <div style={{ width:'100%', height:'100%', display:'flex', flexDirection:'column', background:'#0a1628', position:'relative', overflow:'hidden' }}>
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#0a1628', position: 'relative', overflow: 'hidden' }}>
       {/* HUD */}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 20px', background:'rgba(0,0,0,0.85)', zIndex:10 }}>
-        <div style={{textAlign:'center'}}>
-          <div style={{fontSize:'22px', fontWeight:900, color:'#f7931e'}}>{score}</div>
-          <div style={{fontSize:'10px', color:'rgba(255,255,255,0.6)', textTransform:'uppercase'}}>Score</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 20px', background: 'rgba(0,0,0,0.85)', zIndex: 10 }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '22px', fontWeight: 900, color: '#f7931e' }}>{score}</div>
+          <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase' }}>Score</div>
         </div>
-        <div style={{textAlign:'center'}}>
-          <div style={{fontSize:'22px', fontWeight:900, color:'#f7931e'}}>{timeRemaining}</div>
-          <div style={{fontSize:'10px', color:'rgba(255,255,255,0.6)', textTransform:'uppercase'}}>Time</div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '22px', fontWeight: 900, color: '#f7931e' }}>{timeRemaining}</div>
+          <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase' }}>Time</div>
         </div>
-        <div style={{textAlign:'center'}}>
-          <div style={{fontSize:'22px', fontWeight:900, color:'#f7931e'}}>{shotsMade}/{shotsTaken}</div>
-          <div style={{fontSize:'10px', color:'rgba(255,255,255,0.6)', textTransform:'uppercase'}}>Goals</div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '22px', fontWeight: 900, color: '#f7931e' }}>{shotsMade}/{shotsTaken}</div>
+          <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase' }}>Goals</div>
         </div>
       </div>
 
       {/* Canvas */}
-      <div ref={containerRef} style={{flex:1, position:'relative'}}>
-        <canvas ref={canvasRef} style={{width:'100%', height:'100%', display:'block', touchAction:'none'}} />
+      <div ref={containerRef} style={{ flex: 1, position: 'relative' }}>
+        <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none', cursor: gameState === 'aiming' ? 'crosshair' : 'default' }} />
       </div>
     </div>
   );
