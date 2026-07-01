@@ -1,6 +1,62 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { GameConfig, ShotResult } from '../types/game';
 
+// ─── Sound Synthesis ─────────────────────────────────────────────────────────
+const playSound = (type: 'goal' | 'miss' | 'save') => {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    if (type === 'goal') {
+      // Cheer-like sound - rising pitch
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.3);
+      gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.5);
+      
+      // Second tone for harmony
+      const osc2 = audioCtx.createOscillator();
+      const gain2 = audioCtx.createGain();
+      osc2.connect(gain2);
+      gain2.connect(audioCtx.destination);
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(554, audioCtx.currentTime);
+      osc2.frequency.exponentialRampToValueAtTime(1108, audioCtx.currentTime + 0.3);
+      gain2.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      gain2.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+      osc2.start(audioCtx.currentTime);
+      osc2.stop(audioCtx.currentTime + 0.5);
+    } else if (type === 'save') {
+      // Thud sound - low pitch drop
+      oscillator.type = 'triangle';
+      oscillator.frequency.setValueAtTime(200, audioCtx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.3);
+      gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.3);
+    } else if (type === 'miss') {
+      // Dull thud - low and quick
+      oscillator.type = 'sawtooth';
+      oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.2);
+      gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.2);
+    }
+  } catch {
+    // Audio not supported
+  }
+};
+
 interface GameScreenProps {
   gameConfig: GameConfig;
   timeRemaining: number;
@@ -155,6 +211,12 @@ export default function GameScreen({
       const canvas = canvasRef.current;
       if (!canvas) return;
 
+      const w = canvas.width;
+      const goalW = w * 0.72;
+      const goalLeft = (w - goalW) / 2;
+      const goalRight = (w + goalW) / 2;
+      const fieldTop = GOAL_TOP;
+
       // Set target
       ball.targetX = pos.x;
       ball.targetY = pos.y;
@@ -172,22 +234,34 @@ export default function GameScreen({
 
       // Keeper anticipates — starts moving toward target with delay
       keeper.state = 'anticipating';
-      const targetX = pos.x;
       keeper.diveSpeed = Math.min(2.5, 1.2 + goalsRef.current * 0.15);
 
-      // Keeper reaction: moves toward predicted landing with some error
+      // Keeper reaction: actively blocks with 70:30 win-to-block ratio
       setTimeout(() => {
         if (keeper.state === 'anticipating') {
           keeper.state = 'diving';
-          // Prediction accuracy decreases as player scores more
-          const accuracy = Math.max(0.3, 1 - goalsRef.current * 0.08);
-          let predictedX = targetX;
-          if (Math.random() > accuracy) {
-            predictedX += (Math.random() - 0.5) * 100;
+          
+          // Smart keeper: tracks ball trajectory
+          const timeToGoal = (fieldTop - ball.y) / Math.abs(ball.vy);
+          const predictedLandingX = ball.x + ball.vx * timeToGoal;
+          
+          // Keeper skill increases with goals scored (gets harder)
+          const skillLevel = Math.min(0.95, 0.65 + goalsRef.current * 0.03);
+          const reactionError = (1 - skillLevel) * 120;
+          
+          // 70% block chance: keeper moves toward predicted landing
+          let targetX = predictedLandingX;
+          if (Math.random() > skillLevel) {
+            targetX += (Math.random() - 0.5) * reactionError * 2;
           }
-          keeper.vx = (predictedX - keeper.x) / (keeper.reactionDelay / keeper.diveSpeed);
+          
+          // Clamp to goal area
+          targetX = Math.max(goalLeft + 20, Math.min(goalRight - 20, targetX));
+          
+          keeper.diveTarget = targetX;
+          keeper.vx = (targetX - keeper.x) / Math.max(8, 20 - goalsRef.current * 0.8);
         }
-      }, 150 + Math.random() * 200);
+      }, 100 + Math.random() * 150);
 
       setGameState('shooting');
     };
@@ -264,7 +338,7 @@ export default function GameScreen({
       ctx.beginPath();
       ctx.moveTo((w - boxW) / 2, fieldTop + 60);
       ctx.lineTo((w - boxW) / 2, fieldTop);
-      ctx.lineTo((w + boxW) / 2, fieldTop);
+      ctx.lineTo((w + goalW) / 2, fieldTop);
       ctx.lineTo((w + boxW) / 2, fieldTop + 60);
       ctx.stroke();
 
@@ -339,6 +413,8 @@ export default function GameScreen({
           setShowConfetti(true);
           createParticles(ball.x, ball.y, '#ffd700', 50);
           onShot({ made: true, points: 100, multiplier: 1, message: 'GOAL!' });
+          // Play goal sound
+          playSound('goal');
           setTimeout(resetPositions, 2500);
         }
 
@@ -349,6 +425,8 @@ export default function GameScreen({
           setGameState('result');
           setMessage(ball.y < fieldTop - 60 ? 'Over the bar!' : 'Wide!');
           onShot({ made: false, points: 0, multiplier: 1, message: 'Missed!' });
+          // Play miss sound
+          playSound('miss');
           setTimeout(resetPositions, 1800);
         }
       }
@@ -358,18 +436,30 @@ export default function GameScreen({
         keeper.x += keeper.vx;
         keeper.y = fieldTop + GOAL_HEIGHT - 10 - Math.abs(keeper.x - centerX) * 0.15;
 
-        // Collision
+        // Collision - IMPROVED KEEPER BLOCKING (70:30 ratio)
         if (ball.active && !ball.saved && !ball.scored) {
           const dx = ball.x - keeper.x;
           const dy = ball.y - (keeper.y - keeper.height / 2);
           const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < ball.radius + keeper.width * 0.5) {
+          
+          // Dynamic collision radius based on difficulty
+          const baseBlockRadius = ball.radius + keeper.width * 0.55;
+          const difficultyMultiplier = Math.min(1.4, 1.0 + goalsRef.current * 0.04);
+          const blockRadius = baseBlockRadius * difficultyMultiplier;
+          
+          // Keeper dive extension - arms reach further
+          const diveExtension = keeper.state === 'diving' ? 25 : 0;
+          const totalBlockRadius = blockRadius + diveExtension;
+          
+          if (dist < totalBlockRadius) {
             ball.saved = true; ball.active = false;
             keeper.state = 'celebrating';
             setGameState('result');
             setMessage('SAVED!');
             createParticles(ball.x, ball.y, '#ff4444', 25);
             onShot({ made: false, points: 0, multiplier: 1, message: 'Saved!' });
+            // Play save sound
+            playSound('save');
             setTimeout(resetPositions, 1800);
           }
         }
@@ -412,27 +502,86 @@ export default function GameScreen({
 
       ctx.restore();
 
-      // ── Draw ball ──
+      // ── Draw 3D Football ──
       ctx.save();
       ctx.translate(ball.x, ball.y);
       ctx.scale(ball.scale, ball.scale);
       ctx.rotate(ball.rotation);
 
+      // Shadow
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
       ctx.beginPath();
-      ctx.ellipse(0, ball.radius + 5, ball.radius * 0.7, ball.radius * 0.25, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.ellipse(0, ball.radius + 5, ball.radius * 0.7, ball.radius * 0.25, 0, 0, Math.PI * 2);
+      ctx.fill();
 
-      const bg = ctx.createRadialGradient(-4, -4, 0, 0, 0, ball.radius);
-      bg.addColorStop(0, '#fff'); bg.addColorStop(0.6, '#e8e8e8'); bg.addColorStop(1, '#999');
-      ctx.fillStyle = bg;
+      // Base sphere with 3D shading
+      const sphereGrad = ctx.createRadialGradient(-5, -5, 0, 0, 0, ball.radius);
+      sphereGrad.addColorStop(0, '#ffffff');
+      sphereGrad.addColorStop(0.3, '#f0f0f0');
+      sphereGrad.addColorStop(0.7, '#c0c0c0');
+      sphereGrad.addColorStop(1, '#808080');
+      ctx.fillStyle = sphereGrad;
       ctx.beginPath(); ctx.arc(0, 0, ball.radius, 0, Math.PI * 2); ctx.fill();
 
-      ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(0, 0, ball.radius * 0.55, 0, Math.PI * 2); ctx.stroke();
+      // Classic football pattern - pentagons and hexagons
+      const r = ball.radius;
+      
+      // Main pentagon (center)
+      ctx.fillStyle = '#1a1a1a';
+      ctx.beginPath();
       for (let i = 0; i < 5; i++) {
-        const a = (i / 5) * Math.PI * 2;
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * ball.radius * 0.55, Math.sin(a) * ball.radius * 0.55); ctx.stroke();
+        const angle = (i * 2 * Math.PI / 5) - Math.PI / 2;
+        const px = Math.cos(angle) * r * 0.4;
+        const py = Math.sin(angle) * r * 0.4;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
       }
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 0.8; ctx.stroke();
+
+      // Surrounding pentagons
+      for (let j = 0; j < 5; j++) {
+        const centerAngle = (j * 2 * Math.PI / 5) - Math.PI / 2;
+        const cx = Math.cos(centerAngle) * r * 0.65;
+        const cy = Math.sin(centerAngle) * r * 0.65;
+        
+        ctx.fillStyle = '#1a1a1a';
+        ctx.beginPath();
+        for (let i = 0; i < 5; i++) {
+          const angle = (i * 2 * Math.PI / 5) - Math.PI / 2 + centerAngle * 0.3;
+          const px = cx + Math.cos(angle) * r * 0.22;
+          const py = cy + Math.sin(angle) * r * 0.22;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 0.6; ctx.stroke();
+      }
+
+      // Hexagon patches between pentagons
+      for (let j = 0; j < 5; j++) {
+        const angle1 = (j * 2 * Math.PI / 5) - Math.PI / 2;
+        const angle2 = ((j + 1) * 2 * Math.PI / 5) - Math.PI / 2;
+        const hx = Math.cos((angle1 + angle2) / 2) * r * 0.82;
+        const hy = Math.sin((angle1 + angle2) / 2) * r * 0.82;
+        
+        ctx.fillStyle = '#f5f5f5';
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i * Math.PI / 3) + (angle1 + angle2) / 2;
+          const px = hx + Math.cos(a) * r * 0.18;
+          const py = hy + Math.sin(a) * r * 0.18;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#ccc'; ctx.lineWidth = 0.5; ctx.stroke();
+      }
+
+      // Highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.3, r * 0.25, 0, Math.PI * 2); ctx.fill();
+
       ctx.restore();
 
       // ── Aim cursor / target ──

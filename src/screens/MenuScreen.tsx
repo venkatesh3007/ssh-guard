@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 interface MenuScreenProps {
   highScore: number;
@@ -7,7 +7,53 @@ interface MenuScreenProps {
   onShowLeaderboard: () => void;
 }
 
+// Football icon component
+const FootballIcon = ({ size = 40 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 100 100">
+    <defs>
+      <radialGradient id="ballGrad" cx="30%" cy="30%">
+        <stop offset="0%" stopColor="#fff" />
+        <stop offset="50%" stopColor="#f0f0f0" />
+        <stop offset="100%" stopColor="#999" />
+      </radialGradient>
+    </defs>
+    <circle cx="50" cy="50" r="48" fill="url(#ballGrad)" stroke="#666" strokeWidth="1" />
+    {/* Pentagon center */}
+    <polygon points="50,25 73,38 64,62 36,62 27,38" fill="#1a1a1a" stroke="#333" strokeWidth="1" />
+    {/* Surrounding pentagons */}
+    <polygon points="50,5 60,15 55,22 45,22 40,15" fill="#1a1a1a" stroke="#333" strokeWidth="0.8" />
+    <polygon points="75,20 85,28 78,38 68,35 65,25" fill="#1a1a1a" stroke="#333" strokeWidth="0.8" />
+    <polygon points="80,55 85,65 75,72 68,65 72,55" fill="#1a1a1a" stroke="#333" strokeWidth="0.8" />
+    <polygon points="55,78 62,88 50,95 38,88 45,78" fill="#1a1a1a" stroke="#333" strokeWidth="0.8" />
+    <polygon points="20,55 28,65 25,72 15,65 18,55" fill="#1a1a1a" stroke="#333" strokeWidth="0.8" />
+    {/* Highlight */}
+    <ellipse cx="35" cy="35" rx="12" ry="8" fill="rgba(255,255,255,0.3)" transform="rotate(-30 35 35)" />
+  </svg>
+);
+
+// Trophy icon
+const TrophyIcon = ({ size = 24 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" />
+    <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18" />
+    <path d="M4 22h16" />
+    <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" />
+    <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" />
+    <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" />
+  </svg>
+);
+
+// Games played icon
+const GamesIcon = ({ size = 24 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <path d="M12 6v6l4 2" />
+  </svg>
+);
+
 export default function MenuScreen({ highScore, totalGames, onStartGame, onShowLeaderboard }: MenuScreenProps) {
+  const [showReferral, setShowReferral] = useState(false);
+
   const containerStyle: React.CSSProperties = {
     width: '100%',
     height: '100%',
@@ -24,24 +70,8 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    marginBottom: '40px',
+    marginBottom: '30px',
     zIndex: 2,
-  };
-
-  const logoStyle: React.CSSProperties = {
-    width: '120px',
-    height: '120px',
-    borderRadius: '50%',
-    background: 'linear-gradient(135deg, #ff6b35 0%, #f7931e 100%)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '48px',
-    fontWeight: 900,
-    color: '#fff',
-    marginBottom: '16px',
-    boxShadow: '0 8px 32px rgba(255, 107, 53, 0.4)',
-    border: '4px solid rgba(255, 255, 255, 0.2)',
   };
 
   const titleStyle: React.CSSProperties = {
@@ -64,32 +94,35 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
 
   const statsContainerStyle: React.CSSProperties = {
     display: 'flex',
-    gap: '24px',
-    marginBottom: '40px',
+    gap: '20px',
+    marginBottom: '32px',
     zIndex: 2,
   };
 
   const statBoxStyle: React.CSSProperties = {
-    background: 'rgba(255, 255, 255, 0.1)',
+    background: 'rgba(255, 255, 255, 0.08)',
     backdropFilter: 'blur(10px)',
-    borderRadius: '16px',
-    padding: '16px 24px',
+    borderRadius: '20px',
+    padding: '20px 24px',
     textAlign: 'center',
-    border: '1px solid rgba(255, 255, 255, 0.2)',
-    minWidth: '120px',
+    border: '1px solid rgba(255, 255, 255, 0.15)',
+    minWidth: '140px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '8px',
   };
 
   const statValueStyle: React.CSSProperties = {
-    fontSize: '28px',
+    fontSize: '32px',
     fontWeight: 900,
     color: '#f7931e',
   };
 
   const statLabelStyle: React.CSSProperties = {
-    fontSize: '12px',
+    fontSize: '11px',
     fontWeight: 600,
     color: 'rgba(255, 255, 255, 0.7)',
-    marginTop: '4px',
     textTransform: 'uppercase',
     letterSpacing: '1px',
   };
@@ -99,7 +132,7 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
     padding: '18px 32px',
     borderRadius: '50px',
     border: 'none',
-    fontSize: '20px',
+    fontSize: '18px',
     fontWeight: 700,
     fontFamily: 'Montserrat, sans-serif',
     cursor: 'pointer',
@@ -107,13 +140,17 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
     textTransform: 'uppercase',
     letterSpacing: '2px',
     zIndex: 2,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
   };
 
   const primaryButtonStyle: React.CSSProperties = {
     ...buttonStyle,
     background: 'linear-gradient(135deg, #ff6b35 0%, #f7931e 100%)',
     color: '#fff',
-    marginBottom: '16px',
+    marginBottom: '12px',
     boxShadow: '0 8px 32px rgba(255, 107, 53, 0.4)',
   };
 
@@ -122,6 +159,15 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
     background: 'rgba(255, 255, 255, 0.1)',
     color: '#fff',
     border: '2px solid rgba(255, 255, 255, 0.3)',
+    marginBottom: '12px',
+  };
+
+  const referButtonStyle: React.CSSProperties = {
+    ...buttonStyle,
+    background: 'linear-gradient(135deg, #00c853 0%, #64dd17 100%)',
+    color: '#fff',
+    marginBottom: '12px',
+    boxShadow: '0 8px 32px rgba(0, 200, 83, 0.3)',
   };
 
   const fieldPatternStyle: React.CSSProperties = {
@@ -130,19 +176,49 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
     left: 0,
     right: 0,
     height: '40%',
-    background: 'linear-gradient(180deg, transparent 0%, rgba(34, 139, 34, 0.3) 100%)',
+    background: 'linear-gradient(180deg, transparent 0%, rgba(34, 139, 34, 0.2) 100%)',
     zIndex: 1,
   };
 
-  const ballStyle: React.CSSProperties = {
-    position: 'absolute',
-    width: '60px',
-    height: '60px',
-    borderRadius: '50%',
-    background: 'radial-gradient(circle at 30% 30%, #fff 0%, #ddd 50%, #999 100%)',
-    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
-    zIndex: 1,
-    animation: 'float 3s ease-in-out infinite',
+  // Referral modal styles
+  const modalOverlayStyle: React.CSSProperties = {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: 'rgba(0,0,0,0.8)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 100,
+  };
+
+  const modalContentStyle: React.CSSProperties = {
+    background: 'linear-gradient(135deg, #1a3a5c 0%, #0a1628 100%)',
+    borderRadius: '24px',
+    padding: '32px',
+    maxWidth: '360px',
+    width: '90%',
+    border: '1px solid rgba(255,255,255,0.2)',
+    textAlign: 'center',
+  };
+
+  const handleReferralShare = () => {
+    const referralLink = `https://stucred.com/football?ref=${Math.random().toString(36).substring(7)}`;
+    const shareText = `🏆 Join me in StuCred Football Challenge!\n\nDownload the app → Play the game → Unlock amazing rewards!\n\n${referralLink}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: 'StuCred Football Challenge',
+        text: shareText,
+        url: referralLink,
+      }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(shareText).then(() => {
+        alert('Referral link copied to clipboard!');
+      }).catch(() => {});
+    }
   };
 
   return (
@@ -150,33 +226,47 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
       <style>{`
         @keyframes float {
           0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-20px) rotate(180deg); }
+          50% { transform: translateY(-15px) rotate(5deg); }
         }
         @keyframes pulse {
           0%, 100% { transform: scale(1); }
           50% { transform: scale(1.05); }
         }
+        @keyframes bounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-10px); }
+        }
       `}</style>
 
       <div style={fieldPatternStyle} />
       
-      {/* Decorative balls */}
-      <div style={{ ...ballStyle, top: '10%', left: '10%', animationDelay: '0s' }} />
-      <div style={{ ...ballStyle, top: '20%', right: '15%', width: '40px', height: '40px', animationDelay: '1s' }} />
-      <div style={{ ...ballStyle, bottom: '30%', left: '20%', width: '30px', height: '30px', animationDelay: '2s' }} />
+      {/* Decorative footballs */}
+      <div style={{ position: 'absolute', top: '8%', left: '8%', animation: 'float 4s ease-in-out infinite', opacity: 0.6 }}>
+        <FootballIcon size={50} />
+      </div>
+      <div style={{ position: 'absolute', top: '15%', right: '10%', animation: 'float 3.5s ease-in-out infinite 0.5s', opacity: 0.4 }}>
+        <FootballIcon size={35} />
+      </div>
+      <div style={{ position: 'absolute', bottom: '25%', left: '15%', animation: 'float 5s ease-in-out infinite 1s', opacity: 0.3 }}>
+        <FootballIcon size={28} />
+      </div>
 
       <div style={logoContainerStyle}>
-        <div style={logoStyle}>S</div>
+        <div style={{ animation: 'bounce 2s ease-in-out infinite' }}>
+          <FootballIcon size={100} />
+        </div>
         <div style={titleStyle}>StuCred</div>
         <div style={subtitleStyle}>Football Challenge</div>
       </div>
 
       <div style={statsContainerStyle}>
         <div style={statBoxStyle}>
+          <TrophyIcon size={28} />
           <div style={statValueStyle}>{highScore}</div>
           <div style={statLabelStyle}>Best Score</div>
         </div>
         <div style={statBoxStyle}>
+          <GamesIcon size={28} />
           <div style={statValueStyle}>{totalGames}</div>
           <div style={statLabelStyle}>Games Played</div>
         </div>
@@ -194,7 +284,22 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
           e.currentTarget.style.boxShadow = '0 8px 32px rgba(255, 107, 53, 0.4)';
         }}
       >
-        Play Now
+        ⚽ Play Now
+      </button>
+
+      <button
+        style={referButtonStyle}
+        onClick={() => setShowReferral(true)}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = 'scale(1.05)';
+          e.currentTarget.style.boxShadow = '0 12px 40px rgba(0, 200, 83, 0.5)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = 'scale(1)';
+          e.currentTarget.style.boxShadow = '0 8px 32px rgba(0, 200, 83, 0.3)';
+        }}
+      >
+        🎁 Refer a Friend
       </button>
 
       <button
@@ -209,8 +314,69 @@ export default function MenuScreen({ highScore, totalGames, onStartGame, onShowL
           e.currentTarget.style.transform = 'scale(1)';
         }}
       >
-        Leaderboard
+        🏆 Leaderboard
       </button>
+
+      {/* Referral Modal */}
+      {showReferral && (
+        <div style={modalOverlayStyle} onClick={() => setShowReferral(false)}>
+          <div style={modalContentStyle} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎁</div>
+            <h2 style={{ fontSize: '24px', fontWeight: 900, color: '#fff', marginBottom: '8px' }}>
+              Refer & Earn Rewards!
+            </h2>
+            <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.7)', marginBottom: '24px', lineHeight: 1.5 }}>
+              Share StuCred Football Challenge with your friends and unlock amazing rewards!
+            </p>
+            
+            <div style={{ 
+              background: 'rgba(0,0,0,0.3)', 
+              borderRadius: '16px', 
+              padding: '20px', 
+              marginBottom: '24px',
+              textAlign: 'left'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                <span style={{ fontSize: '24px' }}>📱</span>
+                <span style={{ color: '#fff', fontWeight: 600 }}>Download the app</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                <span style={{ fontSize: '24px' }}>⚽</span>
+                <span style={{ color: '#fff', fontWeight: 600 }}>Play the game</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '24px' }}>🎉</span>
+                <span style={{ color: '#fff', fontWeight: 600 }}>Unlock amazing rewards</span>
+              </div>
+            </div>
+
+            <button
+              style={{
+                ...primaryButtonStyle,
+                width: '100%',
+                marginBottom: '12px',
+              }}
+              onClick={handleReferralShare}
+            >
+              📤 Share Now
+            </button>
+            
+            <button
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'rgba(255,255,255,0.5)',
+                fontSize: '14px',
+                cursor: 'pointer',
+                fontFamily: 'Montserrat, sans-serif',
+              }}
+              onClick={() => setShowReferral(false)}
+            >
+              Maybe Later
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
